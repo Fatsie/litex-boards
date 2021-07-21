@@ -54,7 +54,7 @@ class _CRG(Module):
 
         # USB PLL
         self.submodules.pll = pll = iCE40PLL()
-        self.comb += pll.reset.eq(self.rst)
+        #self.comb += pll.reset.eq(self.rst) # FIXME: Add proper iCE40PLL reset support and add back | self.rst.
         pll.clko_freq_range = ( 12e6,  275e9) # FIXME: improve iCE40PLL to avoid lowering clko_freq_min.
         pll.register_clkin(clk48, 48e6)
         pll.create_clkout(self.cd_usb_12, 12e6, with_reset=False)
@@ -70,7 +70,7 @@ class _CRG(Module):
 
 class BaseSoC(SoCCore):
     mem_map = {**SoCCore.mem_map, **{"spiflash": 0x80000000}}
-    def __init__(self, bios_flash_offset, sys_clk_freq=int(12e6), **kwargs):
+    def __init__(self, bios_flash_offset, sys_clk_freq=int(12e6), with_led_chaser=True, **kwargs):
         kwargs["uart_name"] = "usb_acm" # Enforce UART to USB-ACM
         platform = fomu_pvt.Platform()
 
@@ -110,27 +110,29 @@ class BaseSoC(SoCCore):
         )
 
         # Leds -------------------------------------------------------------------------------------
-        self.submodules.leds = LedChaser(
-            pads         = platform.request_all("user_led_n"),
-            sys_clk_freq = sys_clk_freq)
+        if with_led_chaser:
+            self.submodules.leds = LedChaser(
+                pads         = platform.request_all("user_led_n"),
+                sys_clk_freq = sys_clk_freq)
 
 # Flash --------------------------------------------------------------------------------------------
 
-def flash(bios_flash_offset):
+def flash(build_dir, build_name, bios_flash_offset):
     from litex.build.dfu import DFUProg
     prog = DFUProg(vid="1209", pid="5bf0")
-    bitstream  = open("build/fomu_pvt/gateware/fomu_pvt.bin",  "rb")
-    bios       = open("build/fomu_pvt/software/bios/bios.bin", "rb")
-    image      = open("build/fomu_pvt/image.bin", "wb")
-    # Copy bitstream at 0x00000000
-    for i in range(0x00000000, 0x0020000):
+    bitstream = open(f"{build_dir}/gateware/{build_name}.bin",  "rb")
+    bios      = open(f"{build_dir}/software/bios/bios.bin", "rb")
+    image     = open(f"{build_dir}/image.bin", "wb")
+    # Copy bitstream at 0.
+    assert bios_flash_offset >= 128*kB
+    for i in range(0, bios_flash_offset):
         b = bitstream.read(1)
         if not b:
             image.write(0xff.to_bytes(1, "big"))
         else:
             image.write(b)
-    # Copy bios at 0x00020000
-    for i in range(0x00000000, 0x00010000):
+    # Copy bios at bios_flash_offset.
+    for i in range(0, 32*kB):
         b = bios.read(1)
         if not b:
             image.write(0xff.to_bytes(1, "big"))
@@ -139,7 +141,7 @@ def flash(bios_flash_offset):
     bitstream.close()
     bios.close()
     image.close()
-    prog.load_bitstream("build/fomu_pvt/image.bin")
+    prog.load_bitstream(f"{build_dir}/image.bin")
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -147,14 +149,16 @@ def main():
     parser = argparse.ArgumentParser(description="LiteX SoC on Fomu")
     parser.add_argument("--build",             action="store_true", help="Build bitstream")
     parser.add_argument("--sys-clk-freq",      default=12e6,        help="System clock frequency (default: 12MHz)")
-    parser.add_argument("--bios-flash-offset", default=0x60000,     help="BIOS offset in SPI Flash (default: 0x60000)")
+    parser.add_argument("--bios-flash-offset", default=0x20000,     help="BIOS offset in SPI Flash (default: 0x20000)")
     parser.add_argument("--flash",             action="store_true", help="Flash Bitstream")
     builder_args(parser)
     soc_core_args(parser)
     args = parser.parse_args()
 
+    dfu_flash_offset = 0x40000
+
     soc = BaseSoC(
-        bios_flash_offset = args.bios_flash_offset,
+        bios_flash_offset = dfu_flash_offset + args.bios_flash_offset,
         sys_clk_freq      = int(float(args.sys_clk_freq)),
         **soc_core_argdict(args)
     )
@@ -162,7 +166,7 @@ def main():
     builder.build(run=args.build)
 
     if args.flash:
-        flash(args.bios_flash_offset)
+        flash(builder.output_dir, soc.build_name, args.bios_flash_offset)
 
 if __name__ == "__main__":
     main()

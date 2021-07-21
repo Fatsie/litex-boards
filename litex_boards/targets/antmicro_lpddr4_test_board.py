@@ -55,7 +55,7 @@ class BaseSoC(SoCCore):
     def __init__(self, *, sys_clk_freq=int(50e6), iodelay_clk_freq=200e6,
             with_ethernet=False, with_etherbone=False, eth_ip="192.168.1.50", eth_dynamic_ip=False,
             with_hyperram=False, with_sdcard=False, with_jtagbone=True, with_uartbone=False,
-            ident_version=True, **kwargs):
+            with_led_chaser=True, ident_version=True, **kwargs):
         platform = lpddr4_test_board.Platform()
 
         # SoCCore ----------------------------------------------------------------------------------
@@ -91,9 +91,14 @@ class BaseSoC(SoCCore):
 
         # Ethernet / Etherbone ---------------------------------------------------------------------
         if with_ethernet or with_etherbone:
+            # Traces between PHY and FPGA introduce ignorable delays of ~0.165ns +/- 0.015ns.
+            # PHY chip does not introduce delays on TX (FPGA->PHY), however it includes 1.2ns
+            # delay for RX CLK so we only need 0.8ns to match the desired 2ns.
             self.submodules.ethphy = LiteEthS7PHYRGMII(
                 clock_pads = self.platform.request("eth_clocks"),
-                pads       = self.platform.request("eth"))
+                pads       = self.platform.request("eth"),
+                rx_delay   = 0.8e-9,
+            )
             if with_ethernet:
                 self.add_ethernet(phy=self.ethphy, dynamic_ip=eth_dynamic_ip)
             if with_etherbone:
@@ -108,9 +113,10 @@ class BaseSoC(SoCCore):
             self.add_uartbone("serial", baudrate=1e6)
 
         # Leds -------------------------------------------------------------------------------------
-        self.submodules.leds = LedChaser(
-            pads         = platform.request_all("user_led"),
-            sys_clk_freq = sys_clk_freq)
+        if with_led_chaser:
+            self.submodules.leds = LedChaser(
+                pads         = platform.request_all("user_led"),
+                sys_clk_freq = sys_clk_freq)
 
 # Build --------------------------------------------------------------------------------------------
 
